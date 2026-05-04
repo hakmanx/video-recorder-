@@ -1,8 +1,18 @@
 package com.locklens.app
 
+import android.Manifest
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.camera.core.CameraSelector
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -28,16 +38,19 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -46,11 +59,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
 
 private val LockLensBackground = Color(0xFF05070A)
 private val LockLensSurface = Color(0xFF10151C)
@@ -63,10 +79,10 @@ private val LockLensTextPrimary = Color(0xFFF4F7FB)
 private val LockLensTextSecondary = Color(0xFF9CA8B8)
 
 private enum class Tab(val label: String, val icon: String) {
-    Home("Home", "H"),
-    Library("Library", "L"),
-    Camera("Camera", "C"),
-    Settings("Settings", "S")
+    Home("Главная", "H"),
+    Library("Видео", "V"),
+    Camera("Камера", "C"),
+    Settings("Настройки", "S")
 }
 
 class MainActivity : ComponentActivity() {
@@ -80,6 +96,8 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 private fun LockLensApp() {
+    val context = LocalContext.current
+
     val colorScheme = darkColorScheme(
         primary = LockLensPrimary,
         secondary = LockLensSecondary,
@@ -96,6 +114,83 @@ private fun LockLensApp() {
 
     var selectedTab by rememberSaveable { mutableStateOf(Tab.Home.name) }
     var isRecording by rememberSaveable { mutableStateOf(false) }
+    var audioEnabled by rememberSaveable { mutableStateOf(true) }
+    var selectedLensFacing by rememberSaveable {
+        mutableIntStateOf(CameraSelector.LENS_FACING_BACK)
+    }
+    var statusText by rememberSaveable {
+        mutableStateOf("Готово к записи")
+    }
+
+    val permissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { result ->
+        val granted = requiredPermissions(audioEnabled).all { permission ->
+            result[permission] == true ||
+                ContextCompat.checkSelfPermission(
+                    context,
+                    permission
+                ) == PackageManager.PERMISSION_GRANTED
+        }
+
+        if (granted) {
+            startRecordingService(
+                context = context,
+                lensFacing = selectedLensFacing,
+                audioEnabled = audioEnabled
+            )
+            isRecording = true
+            statusText = "Запуск записи..."
+        } else {
+            statusText = "Разрешите камеру, уведомления и микрофон для записи со звуком"
+        }
+    }
+
+    DisposableEffect(Unit) {
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context?, intent: Intent?) {
+                when (intent?.getStringExtra(RecordingForegroundService.EXTRA_STATE)) {
+                    RecordingForegroundService.STATE_PREPARING -> {
+                        isRecording = true
+                        statusText = "Подготовка камеры..."
+                    }
+
+                    RecordingForegroundService.STATE_RECORDING -> {
+                        isRecording = true
+                        statusText = "Идёт запись. Можно выключить экран."
+                    }
+
+                    RecordingForegroundService.STATE_COMPLETED -> {
+                        isRecording = false
+                        statusText = "Запись сохранена в Видео / LockLens"
+                    }
+
+                    RecordingForegroundService.STATE_FAILED -> {
+                        isRecording = false
+                        statusText = intent.getStringExtra(
+                            RecordingForegroundService.EXTRA_MESSAGE
+                        ) ?: "Ошибка записи"
+                    }
+                }
+            }
+        }
+
+        val filter = IntentFilter(RecordingForegroundService.BROADCAST_RECORDING_STATE)
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            context.registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            @Suppress("DEPRECATION")
+            context.registerReceiver(receiver, filter)
+        }
+
+        onDispose {
+            try {
+                context.unregisterReceiver(receiver)
+            } catch (_: Exception) {
+            }
+        }
+    }
 
     MaterialTheme(colorScheme = colorScheme) {
         Surface(
@@ -115,14 +210,52 @@ private fun LockLensApp() {
                     Tab.Home -> HomeScreen(
                         padding = padding,
                         isRecording = isRecording,
-                        onRecordingClick = { isRecording = !isRecording },
-                        onOpenSettings = { selectedTab = Tab.Settings.name },
+                        statusText = statusText,
+                        selectedCamera = cameraName(selectedLensFacing),
+                        audioEnabled = audioEnabled,
+                        onRecordingClick = {
+                            if (isRecording) {
+                                stopRecordingService(context)
+                                statusText = "Останавливаем и сохраняем..."
+                            } else {
+                                if (hasRequiredPermissions(context, audioEnabled)) {
+                                    startRecordingService(
+                                        context = context,
+                                        lensFacing = selectedLensFacing,
+                                        audioEnabled = audioEnabled
+                                    )
+                                    isRecording = true
+                                    statusText = "Запуск записи..."
+                                } else {
+                                    permissionLauncher.launch(requiredPermissions(audioEnabled))
+                                }
+                            }
+                        },
                         onOpenCamera = { selectedTab = Tab.Camera.name }
                     )
 
                     Tab.Library -> LibraryScreen(padding)
-                    Tab.Camera -> CameraScreen(padding)
-                    Tab.Settings -> SettingsScreen(padding)
+                    Tab.Camera -> CameraScreen(
+                        padding = padding,
+                        selectedLensFacing = selectedLensFacing,
+                        onSelectLens = {
+                            selectedLensFacing = it
+                            statusText = "Выбрана камера: ${cameraName(it)}"
+                        }
+                    )
+
+                    Tab.Settings -> SettingsScreen(
+                        padding = padding,
+                        audioEnabled = audioEnabled,
+                        onAudioChanged = {
+                            audioEnabled = it
+                            statusText = if (it) {
+                                "Запись звука включена"
+                            } else {
+                                "Запись звука выключена"
+                            }
+                        }
+                    )
                 }
             }
         }
@@ -133,8 +266,10 @@ private fun LockLensApp() {
 private fun HomeScreen(
     padding: PaddingValues,
     isRecording: Boolean,
+    statusText: String,
+    selectedCamera: String,
+    audioEnabled: Boolean,
     onRecordingClick: () -> Unit,
-    onOpenSettings: () -> Unit,
     onOpenCamera: () -> Unit
 ) {
     Column(
@@ -143,9 +278,9 @@ private fun HomeScreen(
             .padding(padding)
             .verticalScroll(rememberScrollState())
             .padding(24.dp),
-        verticalArrangement = Arrangement.spacedBy(28.dp)
+        verticalArrangement = Arrangement.spacedBy(24.dp)
     ) {
-        Header(onOpenSettings = onOpenSettings)
+        Header()
 
         Column(
             modifier = Modifier.fillMaxWidth(),
@@ -179,7 +314,7 @@ private fun HomeScreen(
                     Spacer(modifier = Modifier.height(12.dp))
 
                     Text(
-                        text = if (isRecording) "Stop\nRecording" else "Start\nRecording",
+                        text = if (isRecording) "Остановить\nзапись" else "Начать\nзапись",
                         fontSize = 24.sp,
                         fontWeight = FontWeight.Bold,
                         lineHeight = 28.sp,
@@ -191,60 +326,54 @@ private fun HomeScreen(
             Spacer(modifier = Modifier.height(14.dp))
 
             Text(
-                text = if (isRecording) "Recording UI state active. CameraX will be connected next." else "Ready to record",
+                text = statusText,
                 color = if (isRecording) LockLensRecording else LockLensSuccess,
-                fontSize = 14.sp,
-                fontWeight = FontWeight.Medium
+                fontSize = 15.sp,
+                fontWeight = FontWeight.Medium,
+                textAlign = TextAlign.Center
             )
         }
 
         Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
-            StatusCard("Camera", "Back Camera", LockLensPrimary, onClick = onOpenCamera)
-            StatusCard("Resolution", "1080p (1920x1080)", LockLensSecondary)
-            StatusCard("Audio", "Mic On", LockLensSuccess)
-            StatusCard("Folder", "/LockLens/Records", LockLensSecondary)
+            StatusCard("Камера", selectedCamera, LockLensPrimary, onClick = onOpenCamera)
+            StatusCard("Качество", "1080p FHD, fallback если недоступно", LockLensSecondary)
+            StatusCard("Звук", if (audioEnabled) "Микрофон включён" else "Без звука", LockLensSuccess)
+            StatusCard("Папка", "Видео / LockLens", LockLensSecondary)
         }
     }
 }
 
 @Composable
-private fun Header(onOpenSettings: () -> Unit) {
+private fun Header() {
     Row(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.Top
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Image(
-                painter = painterResource(id = R.drawable.ic_locklens_symbol),
-                contentDescription = "LockLens logo",
-                modifier = Modifier.size(54.dp)
-            )
-
-            Spacer(modifier = Modifier.width(12.dp))
-
-            Column {
-                Text(
-                    text = "LockLens",
-                    color = LockLensTextPrimary,
-                    fontSize = 30.sp,
-                    fontWeight = FontWeight.Bold
-                )
-                Text(
-                    text = "Record smarter. Save battery.",
-                    color = LockLensTextSecondary,
-                    fontSize = 14.sp
-                )
-            }
-        }
-
-        Text(
-            text = "Settings",
-            color = LockLensPrimary,
-            fontSize = 16.sp,
-            fontWeight = FontWeight.Bold,
-            modifier = Modifier.clickable { onOpenSettings() }
+        Image(
+            painter = painterResource(id = R.drawable.ic_locklens_symbol),
+            contentDescription = "Логотип LockLens",
+            modifier = Modifier.size(56.dp)
         )
+
+        Spacer(modifier = Modifier.width(12.dp))
+
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = "LockLens",
+                color = LockLensTextPrimary,
+                fontSize = 30.sp,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                text = "Запись с выключенным экраном",
+                color = LockLensTextSecondary,
+                fontSize = 14.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
     }
 }
 
@@ -270,7 +399,7 @@ private fun StatusCard(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Column {
+            Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = title,
                     color = LockLensTextPrimary,
@@ -299,14 +428,18 @@ private fun StatusCard(
 private fun LibraryScreen(padding: PaddingValues) {
     SimpleScreen(
         padding = padding,
-        title = "Library",
-        subtitle = "No recordings yet",
-        body = "Start your first screen-off recording with LockLens."
+        title = "Видео",
+        subtitle = "Записи сохраняются в папку Видео / LockLens",
+        body = "После остановки записи откройте системную Галерею или приложение Файлы. Внутреннюю библиотеку добавим следующим шагом."
     )
 }
 
 @Composable
-private fun CameraScreen(padding: PaddingValues) {
+private fun CameraScreen(
+    padding: PaddingValues,
+    selectedLensFacing: Int,
+    onSelectLens: (Int) -> Unit
+) {
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -316,27 +449,40 @@ private fun CameraScreen(padding: PaddingValues) {
         verticalArrangement = Arrangement.spacedBy(18.dp)
     ) {
         Text(
-            text = "Camera",
+            text = "Камера",
             color = LockLensTextPrimary,
             fontSize = 28.sp,
             fontWeight = FontWeight.Bold
         )
 
         Text(
-            text = "CameraX camera detection will be connected next.",
+            text = "Выберите камеру для записи. Если фронтальная камера недоступна, Android покажет ошибку запуска.",
             color = LockLensTextSecondary,
             fontSize = 14.sp
         )
 
-        StatusCard("Back Camera", "Selected · 1080p available", LockLensPrimary)
-        StatusCard("Front Camera", "Available after CameraX scan", LockLensSecondary)
-        StatusCard("Back Ultra-Wide", "Will appear if device supports it", LockLensSecondary)
-        StatusCard("Back Telephoto", "Will appear if device supports it", LockLensSecondary)
+        SelectableCard(
+            title = "Задняя камера",
+            subtitle = "Основная камера телефона",
+            selected = selectedLensFacing == CameraSelector.LENS_FACING_BACK,
+            onClick = { onSelectLens(CameraSelector.LENS_FACING_BACK) }
+        )
+
+        SelectableCard(
+            title = "Фронтальная камера",
+            subtitle = "Камера для записи себя",
+            selected = selectedLensFacing == CameraSelector.LENS_FACING_FRONT,
+            onClick = { onSelectLens(CameraSelector.LENS_FACING_FRONT) }
+        )
     }
 }
 
 @Composable
-private fun SettingsScreen(padding: PaddingValues) {
+private fun SettingsScreen(
+    padding: PaddingValues,
+    audioEnabled: Boolean,
+    onAudioChanged: (Boolean) -> Unit
+) {
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -346,17 +492,101 @@ private fun SettingsScreen(padding: PaddingValues) {
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
         Text(
-            text = "Settings",
+            text = "Настройки",
             color = LockLensTextPrimary,
             fontSize = 28.sp,
             fontWeight = FontWeight.Bold
         )
 
-        StatusCard("Recording", "Default camera, resolution, audio", LockLensPrimary)
-        StatusCard("Storage", "Folder and gallery visibility", LockLensSecondary)
-        StatusCard("Privacy", "Local-only recordings and legal reminder", LockLensSuccess)
-        StatusCard("Battery & Samsung", "Keep recording stable", LockLensSecondary)
-        StatusCard("Interface", "AMOLED Graphite", LockLensPrimary)
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(24.dp),
+            colors = CardDefaults.cardColors(containerColor = LockLensSurface),
+            border = BorderStroke(1.dp, LockLensSurfaceElevated)
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(18.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Запись звука",
+                        color = LockLensTextPrimary,
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Text(
+                        text = if (audioEnabled) "Микрофон включён" else "Видео без звука",
+                        color = LockLensTextSecondary,
+                        fontSize = 14.sp
+                    )
+                }
+
+                Switch(
+                    checked = audioEnabled,
+                    onCheckedChange = onAudioChanged
+                )
+            }
+        }
+
+        StatusCard("Хранение", "Тестовая версия: Видео / LockLens", LockLensSecondary)
+        StatusCard("Приватность", "Запись только после нажатия пользователем", LockLensSuccess)
+        StatusCard("Samsung", "Если запись обрывается, отключите ограничения батареи", LockLensSecondary)
+        StatusCard("Тема", "AMOLED Graphite", LockLensPrimary)
+    }
+}
+
+@Composable
+private fun SelectableCard(
+    title: String,
+    subtitle: String,
+    selected: Boolean,
+    onClick: () -> Unit
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onClick() },
+        shape = RoundedCornerShape(24.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = if (selected) LockLensSurfaceElevated else LockLensSurface
+        ),
+        border = BorderStroke(
+            width = 1.dp,
+            color = if (selected) LockLensPrimary else LockLensSurfaceElevated
+        )
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(18.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = title,
+                    color = LockLensTextPrimary,
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Text(
+                    text = subtitle,
+                    color = LockLensTextSecondary,
+                    fontSize = 14.sp
+                )
+            }
+
+            Text(
+                text = if (selected) "Выбрано" else "Выбрать",
+                color = if (selected) LockLensPrimary else LockLensTextSecondary,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Bold
+            )
+        }
     }
 }
 
@@ -387,7 +617,7 @@ private fun SimpleScreen(
         Text(
             text = subtitle,
             color = LockLensTextPrimary,
-            fontSize = 20.sp,
+            fontSize = 19.sp,
             fontWeight = FontWeight.SemiBold,
             textAlign = TextAlign.Center
         )
@@ -431,8 +661,10 @@ private fun LockLensBottomNavigation(
                     Text(
                         text = tab.label,
                         color = if (selected) LockLensPrimary else LockLensTextSecondary,
-                        fontSize = 12.sp,
-                        fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium
+                        fontSize = 11.sp,
+                        fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                 },
                 colors = NavigationBarItemDefaults.colors(
@@ -444,5 +676,61 @@ private fun LockLensBottomNavigation(
                 )
             )
         }
+    }
+}
+
+private fun requiredPermissions(audioEnabled: Boolean): Array<String> {
+    val permissions = mutableListOf(Manifest.permission.CAMERA)
+
+    if (audioEnabled) {
+        permissions += Manifest.permission.RECORD_AUDIO
+    }
+
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        permissions += Manifest.permission.POST_NOTIFICATIONS
+    }
+
+    return permissions.toTypedArray()
+}
+
+private fun hasRequiredPermissions(
+    context: Context,
+    audioEnabled: Boolean
+): Boolean {
+    return requiredPermissions(audioEnabled).all { permission ->
+        ContextCompat.checkSelfPermission(
+            context,
+            permission
+        ) == PackageManager.PERMISSION_GRANTED
+    }
+}
+
+private fun startRecordingService(
+    context: Context,
+    lensFacing: Int,
+    audioEnabled: Boolean
+) {
+    val intent = Intent(context, RecordingForegroundService::class.java).apply {
+        action = RecordingForegroundService.ACTION_START_RECORDING
+        putExtra(RecordingForegroundService.EXTRA_LENS_FACING, lensFacing)
+        putExtra(RecordingForegroundService.EXTRA_AUDIO_ENABLED, audioEnabled)
+    }
+
+    ContextCompat.startForegroundService(context, intent)
+}
+
+private fun stopRecordingService(context: Context) {
+    val intent = Intent(context, RecordingForegroundService::class.java).apply {
+        action = RecordingForegroundService.ACTION_STOP_RECORDING
+    }
+
+    context.startService(intent)
+}
+
+private fun cameraName(lensFacing: Int): String {
+    return if (lensFacing == CameraSelector.LENS_FACING_FRONT) {
+        "Фронтальная камера"
+    } else {
+        "Задняя камера"
     }
 }
