@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="locklens_background">#05070A</color>
+    <color name="locklens_surface">#10151C</color>
+    <color name="locklens_surface_elevated">#171E28</color>
+    <color name="locklens_primary">#20D6FF</color>
+    <color name="locklens_secondary">#6C7DFF</color>
+    <color name="locklens_recording">#FF4D5E</color>
+    <color name="locklens_success">#2EE6A6</color>
+    <color name="locklens_text_primary">#F4F7FB</color>
+    <color name="locklens_text_secondary">#9CA8B8</color>
+</resources>
