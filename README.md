@@ -1,26 +1,35 @@
 # LockLens Android
 
-LockLens is a battery-friendly Android video recorder designed for user-initiated screen-off recording.
+LockLens — Android-приложение для записи видео после явного запуска пользователем, с возможностью продолжать запись при выключенном экране.
 
-## Current stage
+## Рабочая проверочная версия
 
-Initial Android project skeleton.
+Реализовано:
 
-## Tech stack
+- русский интерфейс;
+- запись видео через CameraX;
+- Foreground Service;
+- постоянное уведомление записи;
+- остановка из приложения;
+- остановка из уведомления;
+- запись при выключенном экране после запуска пользователем;
+- выбор задней / фронтальной камеры;
+- выбор качества SD / HD / FHD / UHD с fallback;
+- запись со звуком / без звука;
+- сохранение во внутреннюю библиотеку LockLens;
+- сохранение в Галерею / LockLens;
+- список записей;
+- открыть запись;
+- поделиться записью;
+- переименовать запись;
+- удалить запись;
+- экспортировать в галерею;
+- скрыть из галереи;
+- настройки разрешений;
+- переход в настройки батареи Samsung/Android.
 
-- Kotlin
-- Jetpack Compose
-- Material 3
-- CameraX planned
-- Foreground Service planned
-- GitHub Actions APK build
+## GitHub build
 
-## Build in GitHub
+Actions → Build Debug APK → Download artifact `locklens-debug-apk`.
 
-Go to:
-
-Actions -> Build Debug APK
-
-After successful build, download artifact:
-
-locklens-debug-apk
+Перед установкой новой debug-сборки удалите старую debug-версию LockLens с телефона.

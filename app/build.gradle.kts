@@ -12,14 +12,15 @@ android {
         applicationId = "com.locklens.app"
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 6
+        versionName = "0.6.0"
     }
 
     buildTypes {
         release {
             isMinifyEnabled = false
         }
+
         debug {
             applicationIdSuffix = ".debug"
             versionNameSuffix = "-debug"
@@ -43,8 +44,9 @@ android {
 dependencies {
     implementation("androidx.core:core-ktx:1.15.0")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
-    implementation("androidx.activity:activity-compose:1.9.3")
     implementation("androidx.lifecycle:lifecycle-service:2.8.7")
+    implementation("androidx.activity:activity-compose:1.9.3")
+
     implementation("androidx.concurrent:concurrent-futures:1.3.0")
     implementation("com.google.guava:guava:33.5.0-android")
 
