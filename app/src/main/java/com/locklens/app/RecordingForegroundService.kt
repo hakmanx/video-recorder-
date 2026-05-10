@@ -13,6 +13,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
+import androidx.camera.camera2.interop.Camera2CameraInfo
 import androidx.camera.core.CameraSelector
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.video.FallbackStrategy
@@ -89,6 +90,7 @@ class RecordingForegroundService : LifecycleService() {
         }
 
         val lensFacing = intent.getIntExtra(EXTRA_LENS_FACING, CameraSelector.LENS_FACING_BACK)
+        val selectedCameraId = intent.getStringExtra(EXTRA_CAMERA_ID) ?: ""
         val audioEnabled = intent.getBooleanExtra(EXTRA_AUDIO_ENABLED, true)
         val storageMode = intent.getStringExtra(EXTRA_STORAGE_MODE) ?: STORAGE_PRIVATE
         val customFolderUri = intent.getStringExtra(EXTRA_CUSTOM_FOLDER_URI) ?: ""
@@ -109,9 +111,10 @@ class RecordingForegroundService : LifecycleService() {
                     val provider = providerFuture.get()
                     cameraProvider = provider
 
-                    val cameraSelector = CameraSelector.Builder()
-                        .requireLensFacing(lensFacing)
-                        .build()
+                    val cameraSelector = buildCameraSelector(
+                        lensFacing = lensFacing,
+                        cameraId = selectedCameraId
+                    )
 
                     val recorder = Recorder.Builder()
                         .setQualitySelector(
@@ -171,6 +174,40 @@ class RecordingForegroundService : LifecycleService() {
             },
             ContextCompat.getMainExecutor(this)
         )
+    }
+
+    private fun buildCameraSelector(
+        lensFacing: Int,
+        cameraId: String
+    ): CameraSelector {
+        if (cameraId.isBlank()) {
+            return CameraSelector.Builder()
+                .requireLensFacing(lensFacing)
+                .build()
+        }
+
+        return CameraSelector.Builder()
+            .addCameraFilter { cameraInfos ->
+                val exact = cameraInfos.filter { cameraInfo ->
+                    try {
+                        Camera2CameraInfo.from(cameraInfo).cameraId == cameraId
+                    } catch (_: Exception) {
+                        false
+                    }
+                }
+
+                exact.ifEmpty {
+                    cameraInfos.filter { cameraInfo ->
+                        try {
+                            val currentId = Camera2CameraInfo.from(cameraInfo).cameraId
+                            currentId == cameraId
+                        } catch (_: Exception) {
+                            false
+                        }
+                    }
+                }
+            }
+            .build()
     }
 
     private fun stopRecording() {
@@ -377,6 +414,7 @@ class RecordingForegroundService : LifecycleService() {
         const val EXTRA_STATE = "extra_state"
         const val EXTRA_MESSAGE = "extra_message"
         const val EXTRA_LENS_FACING = "extra_lens_facing"
+        const val EXTRA_CAMERA_ID = "extra_camera_id"
         const val EXTRA_AUDIO_ENABLED = "extra_audio_enabled"
         const val EXTRA_STORAGE_MODE = "extra_storage_mode"
         const val EXTRA_CUSTOM_FOLDER_URI = "extra_custom_folder_uri"

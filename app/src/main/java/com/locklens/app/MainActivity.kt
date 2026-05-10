@@ -1,6 +1,8 @@
 package com.locklens.app
 
 import android.Manifest
+import android.hardware.camera2.CameraCharacteristics
+import android.hardware.camera2.CameraManager
 import android.content.ActivityNotFoundException
 import android.content.BroadcastReceiver
 import android.content.ContentUris
@@ -19,6 +21,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.camera.camera2.interop.Camera2CameraInfo
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
@@ -118,6 +121,13 @@ private data class RecordingItem(
     val visibleInGallery: Boolean
 )
 
+private data class CameraChoice(
+    val id: String,
+    val title: String,
+    val subtitle: String,
+    val lensFacing: Int
+)
+
 private val qualityOptions = listOf(
     QualityOption(RecordingForegroundService.QUALITY_SD, "480p SD", "минимальный размер файла"),
     QualityOption(RecordingForegroundService.QUALITY_HD, "720p HD", "экономия батареи и памяти"),
@@ -151,8 +161,18 @@ private fun LockLensApp() {
     var selectedQuality by rememberSaveable {
         mutableStateOf(prefs.getString("selected_quality", RecordingForegroundService.QUALITY_FHD) ?: RecordingForegroundService.QUALITY_FHD)
     }
+    val cameraChoices = remember { loadCameraChoices(context) }
+
     var selectedLensFacing by rememberSaveable {
         mutableIntStateOf(prefs.getInt("selected_lens_facing", CameraSelector.LENS_FACING_BACK))
+    }
+    var selectedCameraId by rememberSaveable {
+        mutableStateOf(
+            prefs.getString(
+                "selected_camera_id",
+                cameraChoices.firstOrNull { it.lensFacing == CameraSelector.LENS_FACING_BACK }?.id ?: ""
+            ) ?: ""
+        )
     }
     var statusText by rememberSaveable { mutableStateOf("Готово к записи") }
     var legalAccepted by remember { mutableStateOf(prefs.getBoolean("legal_accepted", false)) }
@@ -169,6 +189,8 @@ private fun LockLensApp() {
             val error = startRecordingService(
                 context = context,
                 lensFacing = selectedLensFacing,
+                        cameraId = selectedCameraId,
+                cameraId = selectedCameraId,
                 audioEnabled = audioEnabled,
                 storageMode = storageMode,
                 customFolderUri = customFolderUri,
@@ -299,7 +321,8 @@ private fun LockLensApp() {
                         isRecording = isRecording,
                         statusText = statusText,
                         lensFacing = selectedLensFacing,
-                        cameraName = cameraName(selectedLensFacing),
+                        cameraId = selectedCameraId,
+                        cameraName = cameraTitle(cameraChoices, selectedCameraId, selectedLensFacing),
                         quality = qualityTitle(selectedQuality),
                         audioEnabled = audioEnabled,
                         storageMode = storageMode,
@@ -312,6 +335,8 @@ private fun LockLensApp() {
                                     val error = startRecordingService(
                                         context = context,
                                         lensFacing = selectedLensFacing,
+                        cameraId = selectedCameraId,
+                                        cameraId = selectedCameraId,
                                         audioEnabled = audioEnabled,
                                         storageMode = storageMode,
                                         customFolderUri = customFolderUri,
@@ -362,12 +387,18 @@ private fun LockLensApp() {
 
                     Tab.Camera -> CameraScreen(
                         padding = padding,
+                        cameraChoices = cameraChoices,
+                        selectedCameraId = selectedCameraId,
                         selectedLensFacing = selectedLensFacing,
                         selectedQuality = selectedQuality,
-                        onSelectLens = {
-                            selectedLensFacing = it
-                            prefs.edit().putInt("selected_lens_facing", it).apply()
-                            statusText = "Выбрана камера: ${cameraName(it)}"
+                        onSelectCamera = {
+                            selectedCameraId = it.id
+                            selectedLensFacing = it.lensFacing
+                            prefs.edit()
+                                .putString("selected_camera_id", it.id)
+                                .putInt("selected_lens_facing", it.lensFacing)
+                                .apply()
+                            statusText = "Выбрана камера: ${it.title}"
                         },
                         onSelectQuality = {
                             selectedQuality = it
@@ -432,6 +463,7 @@ private fun LockLensApp() {
 @Composable
 private fun CameraPreview(
     lensFacing: Int,
+    cameraId: String,
     modifier: Modifier
 ) {
     val context = LocalContext.current
@@ -447,9 +479,7 @@ private fun CameraPreview(
                 {
                     try {
                         val provider = future.get()
-                        val selector = CameraSelector.Builder()
-                            .requireLensFacing(lensFacing)
-                            .build()
+                        val selector = cameraSelectorForPreview(lensFacing, cameraId)
 
                         val preview = Preview.Builder().build()
                         preview.setSurfaceProvider(previewView.surfaceProvider)
@@ -471,6 +501,7 @@ private fun HomeScreen(
     isRecording: Boolean,
     statusText: String,
     lensFacing: Int,
+    cameraId: String,
     cameraName: String,
     quality: String,
     audioEnabled: Boolean,
@@ -497,7 +528,7 @@ private fun HomeScreen(
             colors = CardDefaults.cardColors(containerColor = LockLensSurface),
             border = BorderStroke(1.dp, LockLensSurfaceElevated)
         ) {
-            CameraPreview(lensFacing, Modifier.fillMaxSize())
+            CameraPreview(lensFacing, cameraId, Modifier.fillMaxSize())
         }
 
         Button(
@@ -621,11 +652,17 @@ private fun LibraryScreen(
 @Composable
 private fun CameraScreen(
     padding: PaddingValues,
+    cameraChoices: List<CameraChoice>,
+    selectedCameraId: String,
     selectedLensFacing: Int,
     selectedQuality: String,
-    onSelectLens: (Int) -> Unit,
+    onSelectCamera: (CameraChoice) -> Unit,
     onSelectQuality: (String) -> Unit
 ) {
+    val previewCameraId = selectedCameraId.ifBlank {
+        cameraChoices.firstOrNull { it.lensFacing == selectedLensFacing }?.id ?: ""
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -644,15 +681,19 @@ private fun CameraScreen(
             colors = CardDefaults.cardColors(containerColor = LockLensSurface),
             border = BorderStroke(1.dp, LockLensSurfaceElevated)
         ) {
-            CameraPreview(selectedLensFacing, Modifier.fillMaxSize())
+            CameraPreview(selectedLensFacing, previewCameraId, Modifier.fillMaxSize())
         }
 
-        SelectCard("Задняя камера", "Основная камера телефона", selectedLensFacing == CameraSelector.LENS_FACING_BACK) {
-            onSelectLens(CameraSelector.LENS_FACING_BACK)
-        }
+        Text("Модули камеры", color = LockLensTextPrimary, fontSize = 21.sp, fontWeight = FontWeight.Bold)
 
-        SelectCard("Фронтальная камера", "Камера для записи себя", selectedLensFacing == CameraSelector.LENS_FACING_FRONT) {
-            onSelectLens(CameraSelector.LENS_FACING_FRONT)
+        cameraChoices.forEach { camera ->
+            SelectCard(
+                title = camera.title,
+                subtitle = camera.subtitle,
+                selected = selectedCameraId == camera.id
+            ) {
+                onSelectCamera(camera)
+            }
         }
 
         Text("Качество", color = LockLensTextPrimary, fontSize = 21.sp, fontWeight = FontWeight.Bold)
@@ -940,6 +981,7 @@ private fun permissionRuName(permission: String): String {
 private fun startRecordingService(
     context: Context,
     lensFacing: Int,
+    cameraId: String,
     audioEnabled: Boolean,
     storageMode: String,
     customFolderUri: String,
@@ -949,6 +991,7 @@ private fun startRecordingService(
         val intent = Intent(context, RecordingForegroundService::class.java).apply {
             action = RecordingForegroundService.ACTION_START_RECORDING
             putExtra(RecordingForegroundService.EXTRA_LENS_FACING, lensFacing)
+            putExtra(RecordingForegroundService.EXTRA_CAMERA_ID, cameraId)
             putExtra(RecordingForegroundService.EXTRA_AUDIO_ENABLED, audioEnabled)
             putExtra(RecordingForegroundService.EXTRA_STORAGE_MODE, storageMode)
             putExtra(RecordingForegroundService.EXTRA_CUSTOM_FOLDER_URI, customFolderUri)
@@ -979,6 +1022,121 @@ private fun cameraName(lensFacing: Int): String {
     } else {
         "Задняя камера"
     }
+}
+
+private fun cameraTitle(
+    cameras: List<CameraChoice>,
+    cameraId: String,
+    lensFacing: Int
+): String {
+    return cameras.firstOrNull { it.id == cameraId }?.title ?: cameraName(lensFacing)
+}
+
+private fun cameraSelectorForPreview(
+    lensFacing: Int,
+    cameraId: String
+): CameraSelector {
+    if (cameraId.isBlank()) {
+        return CameraSelector.Builder()
+            .requireLensFacing(lensFacing)
+            .build()
+    }
+
+    return CameraSelector.Builder()
+        .addCameraFilter { cameraInfos ->
+            cameraInfos.filter { cameraInfo ->
+                try {
+                    Camera2CameraInfo.from(cameraInfo).cameraId == cameraId
+                } catch (_: Exception) {
+                    false
+                }
+            }
+        }
+        .build()
+}
+
+private fun loadCameraChoices(context: Context): List<CameraChoice> {
+    val result = mutableListOf<CameraChoice>()
+
+    try {
+        val manager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
+
+        data class RawCamera(
+            val id: String,
+            val lensFacing: Int,
+            val focalLength: Float
+        )
+
+        val back = mutableListOf<RawCamera>()
+        val front = mutableListOf<RawCamera>()
+
+        manager.cameraIdList.forEach { id ->
+            val characteristics = manager.getCameraCharacteristics(id)
+            val facing = characteristics.get(CameraCharacteristics.LENS_FACING)
+            val focalLengths = characteristics.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)
+            val focal = focalLengths?.minOrNull() ?: 0f
+
+            when (facing) {
+                CameraCharacteristics.LENS_FACING_BACK -> {
+                    back += RawCamera(
+                        id = id,
+                        lensFacing = CameraSelector.LENS_FACING_BACK,
+                        focalLength = focal
+                    )
+                }
+
+                CameraCharacteristics.LENS_FACING_FRONT -> {
+                    front += RawCamera(
+                        id = id,
+                        lensFacing = CameraSelector.LENS_FACING_FRONT,
+                        focalLength = focal
+                    )
+                }
+            }
+        }
+
+        val sortedBack = back.sortedBy { it.focalLength }
+
+        sortedBack.forEachIndexed { index, camera ->
+            val title = when {
+                sortedBack.size == 1 -> "Основная камера"
+                index == 0 -> "Ультраширокая камера"
+                index == sortedBack.lastIndex -> "Телекамера"
+                index == 1 -> "Основная камера"
+                else -> "Задняя камера ${index + 1}"
+            }
+
+            val subtitle = "ID ${camera.id} · фокус ${String.format(Locale.US, "%.1f", camera.focalLength)} мм"
+
+            result += CameraChoice(
+                id = camera.id,
+                title = title,
+                subtitle = subtitle,
+                lensFacing = CameraSelector.LENS_FACING_BACK
+            )
+        }
+
+        front.sortedBy { it.id }.forEach { camera ->
+            result += CameraChoice(
+                id = camera.id,
+                title = "Фронтальная камера",
+                subtitle = "ID ${camera.id}",
+                lensFacing = CameraSelector.LENS_FACING_FRONT
+            )
+        }
+    } catch (_: Exception) {
+    }
+
+    if (result.isEmpty()) {
+        result += CameraChoice(
+            id = "",
+            title = "Задняя камера",
+            subtitle = "Камера по умолчанию",
+            lensFacing = CameraSelector.LENS_FACING_BACK
+        )
+    }
+
+    return result
 }
 
 private fun qualityTitle(code: String): String {
