@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - working-mvp-reset
   workflow_dispatch:
 
 jobs:

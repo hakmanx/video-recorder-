@@ -12,8 +12,8 @@ android {
         applicationId = "com.locklens.app"
         minSdk = 26
         targetSdk = 36
-        versionCode = 10
-        versionName = "1.0.0-test"
+        versionCode = 20
+        versionName = "1.0.0-working"
     }
 
     buildTypes {

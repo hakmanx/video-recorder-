@@ -46,7 +46,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
@@ -54,8 +53,6 @@ import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -76,7 +73,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -85,7 +81,6 @@ import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import androidx.documentfile.provider.DocumentFile
 import java.io.File
-import java.io.FileOutputStream
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -113,13 +108,6 @@ private data class QualityOption(
     val description: String
 )
 
-private val qualityOptions = listOf(
-    QualityOption(RecordingForegroundService.QUALITY_SD, "480p SD", "минимальный размер файла"),
-    QualityOption(RecordingForegroundService.QUALITY_HD, "720p HD", "экономия батареи и памяти"),
-    QualityOption(RecordingForegroundService.QUALITY_FHD, "1080p FHD", "рекомендуемый баланс"),
-    QualityOption(RecordingForegroundService.QUALITY_UHD, "4K UHD", "максимальное качество, если доступно")
-)
-
 private data class RecordingItem(
     val title: String,
     val uri: Uri,
@@ -128,6 +116,13 @@ private data class RecordingItem(
     val createdAtEpochMs: Long,
     val location: String,
     val visibleInGallery: Boolean
+)
+
+private val qualityOptions = listOf(
+    QualityOption(RecordingForegroundService.QUALITY_SD, "480p SD", "минимальный размер файла"),
+    QualityOption(RecordingForegroundService.QUALITY_HD, "720p HD", "экономия батареи и памяти"),
+    QualityOption(RecordingForegroundService.QUALITY_FHD, "1080p FHD", "рекомендуемый баланс"),
+    QualityOption(RecordingForegroundService.QUALITY_UHD, "4K UHD", "максимальное качество, если доступно")
 )
 
 class MainActivity : ComponentActivity() {
@@ -146,27 +141,13 @@ private fun LockLensApp() {
         context.getSharedPreferences("locklens_settings", Context.MODE_PRIVATE)
     }
 
-    val colorScheme = darkColorScheme(
-        primary = LockLensPrimary,
-        secondary = LockLensSecondary,
-        background = LockLensBackground,
-        surface = LockLensSurface,
-        surfaceVariant = LockLensSurfaceElevated,
-        onPrimary = LockLensBackground,
-        onSecondary = LockLensTextPrimary,
-        onBackground = LockLensTextPrimary,
-        onSurface = LockLensTextPrimary,
-        onSurfaceVariant = LockLensTextSecondary,
-        error = LockLensRecording
-    )
-
     var selectedTab by rememberSaveable { mutableStateOf(Tab.Home.name) }
     var isRecording by rememberSaveable { mutableStateOf(false) }
     var audioEnabled by rememberSaveable { mutableStateOf(prefs.getBoolean("audio_enabled", true)) }
     var storageMode by rememberSaveable {
         mutableStateOf(prefs.getString("storage_mode", RecordingForegroundService.STORAGE_PRIVATE) ?: RecordingForegroundService.STORAGE_PRIVATE)
     }
-    var customFolderUri by rememberSaveable { mutableStateOf(prefs.getString("custom_folder_uri", "" ) ?: "") }
+    var customFolderUri by rememberSaveable { mutableStateOf(prefs.getString("custom_folder_uri", "") ?: "") }
     var selectedQuality by rememberSaveable {
         mutableStateOf(prefs.getString("selected_quality", RecordingForegroundService.QUALITY_FHD) ?: RecordingForegroundService.QUALITY_FHD)
     }
@@ -185,16 +166,24 @@ private fun LockLensApp() {
         ActivityResultContracts.RequestMultiplePermissions()
     ) {
         if (hasRequiredPermissions(context, audioEnabled, storageMode)) {
-            val startError = startRecordingService(context, selectedLensFacing, audioEnabled, storageMode, customFolderUri, selectedQuality)
-            if (startError == null) {
+            val error = startRecordingService(
+                context = context,
+                lensFacing = selectedLensFacing,
+                audioEnabled = audioEnabled,
+                storageMode = storageMode,
+                customFolderUri = customFolderUri,
+                quality = selectedQuality
+            )
+
+            if (error == null) {
                 isRecording = true
                 statusText = "Запуск записи..."
             } else {
                 isRecording = false
-                statusText = startError
+                statusText = error
             }
         } else {
-            statusText = "Разрешения не выданы. Откройте Настройки и выдайте разрешения."
+            statusText = "Разрешения не выданы"
         }
     }
 
@@ -202,9 +191,11 @@ private fun LockLensApp() {
         ActivityResultContracts.OpenDocumentTree()
     ) { uri ->
         if (uri != null) {
-            val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
             try {
-                context.contentResolver.takePersistableUriPermission(uri, flags)
+                context.contentResolver.takePersistableUriPermission(
+                    uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                )
             } catch (_: Exception) {
             }
 
@@ -216,39 +207,41 @@ private fun LockLensApp() {
                 .putString("storage_mode", storageMode)
                 .apply()
 
-            statusText = "Папка выбрана"
             refreshKey++
+            statusText = "Папка выбрана"
         }
     }
 
     DisposableEffect(Unit) {
         val receiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context?, intent: Intent?) {
+                val message = intent?.getStringExtra(RecordingForegroundService.EXTRA_MESSAGE) ?: ""
+
                 when (intent?.getStringExtra(RecordingForegroundService.EXTRA_STATE)) {
                     RecordingForegroundService.STATE_PREPARING -> {
                         isRecording = true
-                        statusText = intent.getStringExtra(RecordingForegroundService.EXTRA_MESSAGE) ?: "Подготовка камеры..."
+                        statusText = message.ifBlank { "Подготовка камеры..." }
                     }
 
                     RecordingForegroundService.STATE_RECORDING -> {
                         isRecording = true
-                        statusText = intent.getStringExtra(RecordingForegroundService.EXTRA_MESSAGE) ?: "Идёт запись"
+                        statusText = message.ifBlank { "Идёт запись" }
                     }
 
                     RecordingForegroundService.STATE_SAVING -> {
                         isRecording = true
-                        statusText = intent.getStringExtra(RecordingForegroundService.EXTRA_MESSAGE) ?: "Сохраняем..."
+                        statusText = message.ifBlank { "Сохраняем..." }
                     }
 
                     RecordingForegroundService.STATE_COMPLETED -> {
                         isRecording = false
-                        statusText = intent.getStringExtra(RecordingForegroundService.EXTRA_MESSAGE) ?: "Запись сохранена"
+                        statusText = message.ifBlank { "Запись сохранена" }
                         refreshKey++
                     }
 
                     RecordingForegroundService.STATE_FAILED -> {
                         isRecording = false
-                        statusText = intent.getStringExtra(RecordingForegroundService.EXTRA_MESSAGE) ?: "Ошибка записи"
+                        statusText = message.ifBlank { "Ошибка записи" }
                         refreshKey++
                     }
                 }
@@ -272,12 +265,29 @@ private fun LockLensApp() {
         }
     }
 
-    MaterialTheme(colorScheme = colorScheme) {
-        Surface(modifier = Modifier.fillMaxSize(), color = LockLensBackground) {
-            Scaffold(
+    MaterialTheme(
+        colorScheme = darkColorScheme(
+            primary = LockLensPrimary,
+            secondary = LockLensSecondary,
+            background = LockLensBackground,
+            surface = LockLensSurface,
+            surfaceVariant = LockLensSurfaceElevated,
+            onPrimary = LockLensBackground,
+            onSecondary = LockLensTextPrimary,
+            onBackground = LockLensTextPrimary,
+            onSurface = LockLensTextPrimary,
+            onSurfaceVariant = LockLensTextSecondary,
+            error = LockLensRecording
+        )
+    ) {
+        androidx.compose.material3.Surface(
+            modifier = Modifier.fillMaxSize(),
+            color = LockLensBackground
+        ) {
+            androidx.compose.material3.Scaffold(
                 containerColor = LockLensBackground,
                 bottomBar = {
-                    LockLensBottomNavigation(
+                    BottomNav(
                         selectedTab = Tab.valueOf(selectedTab),
                         onTabSelected = { selectedTab = it.name }
                     )
@@ -288,24 +298,31 @@ private fun LockLensApp() {
                         padding = padding,
                         isRecording = isRecording,
                         statusText = statusText,
-                        selectedCamera = cameraName(selectedLensFacing),
-                        selectedQuality = qualityTitle(selectedQuality),
+                        lensFacing = selectedLensFacing,
+                        cameraName = cameraName(selectedLensFacing),
+                        quality = qualityTitle(selectedQuality),
                         audioEnabled = audioEnabled,
                         storageMode = storageMode,
-                        selectedLensFacing = selectedLensFacing,
-                        onRecordingClick = {
+                        onRecordClick = {
                             if (isRecording) {
                                 stopRecordingService(context)
                                 statusText = "Останавливаем и сохраняем..."
                             } else {
                                 if (hasRequiredPermissions(context, audioEnabled, storageMode)) {
-                                    val startError = startRecordingService(context, selectedLensFacing, audioEnabled, storageMode, customFolderUri, selectedQuality)
-                                    if (startError == null) {
+                                    val error = startRecordingService(
+                                        context = context,
+                                        lensFacing = selectedLensFacing,
+                                        audioEnabled = audioEnabled,
+                                        storageMode = storageMode,
+                                        customFolderUri = customFolderUri,
+                                        quality = selectedQuality
+                                    )
+
+                                    if (error == null) {
                                         isRecording = true
                                         statusText = "Запуск записи..."
                                     } else {
-                                        isRecording = false
-                                        statusText = startError
+                                        statusText = error
                                     }
                                 } else {
                                     permissionLauncher.launch(requiredPermissions(audioEnabled, storageMode))
@@ -321,9 +338,9 @@ private fun LockLensApp() {
                         recordings = recordings,
                         onRefresh = {
                             refreshKey++
-                            statusText = "Список видео обновлён"
+                            statusText = "Список обновлён"
                         },
-                        onPlay = { item -> statusText = openRecording(context, item) },
+                        onOpen = { item -> statusText = openRecording(context, item) },
                         onShare = { item -> statusText = shareRecording(context, item) },
                         onDelete = { item ->
                             statusText = if (deleteRecording(context, item)) {
@@ -336,7 +353,7 @@ private fun LockLensApp() {
                         onExport = { item ->
                             statusText = if (exportToGallery(context, item)) {
                                 refreshKey++
-                                "Копия сохранена в Галерею / LockLens"
+                                "Сохранено в Галерею / LockLens"
                             } else {
                                 "Не удалось экспортировать"
                             }
@@ -363,7 +380,7 @@ private fun LockLensApp() {
                         padding = padding,
                         audioEnabled = audioEnabled,
                         storageMode = storageMode,
-                        customFolderUri = customFolderUri,
+                        customFolderSelected = customFolderUri.isNotBlank(),
                         permissionStatus = permissionStatusText(context, audioEnabled, storageMode),
                         onAudioChanged = {
                             audioEnabled = it
@@ -387,10 +404,23 @@ private fun LockLensApp() {
                 }
 
                 if (!legalAccepted) {
-                    LegalDialog(
-                        onAccept = {
-                            legalAccepted = true
-                            prefs.edit().putBoolean("legal_accepted", true).apply()
+                    AlertDialog(
+                        onDismissRequest = {},
+                        title = { Text("Используйте ответственно") },
+                        text = {
+                            Text(
+                                "LockLens записывает видео только после вашего нажатия. Во время записи Android показывает системные индикаторы и уведомление."
+                            )
+                        },
+                        confirmButton = {
+                            TextButton(
+                                onClick = {
+                                    legalAccepted = true
+                                    prefs.edit().putBoolean("legal_accepted", true).apply()
+                                }
+                            ) {
+                                Text("Я понимаю")
+                            }
                         }
                     )
                 }
@@ -400,38 +430,16 @@ private fun LockLensApp() {
 }
 
 @Composable
-private fun LegalDialog(onAccept: () -> Unit) {
-    AlertDialog(
-        onDismissRequest = {},
-        title = { Text("Используйте ответственно") },
-        text = {
-            Text(
-                "LockLens записывает видео только после вашего нажатия. Во время записи Android показывает системные индикаторы и уведомление. Используйте запись только там, где это разрешено законом и правилами приватности."
-            )
-        },
-        confirmButton = {
-            TextButton(onClick = onAccept) {
-                Text("Я понимаю")
-            }
-        }
-    )
-}
-
-@Composable
-private fun CameraPreviewBox(
+private fun CameraPreview(
     lensFacing: Int,
-    modifier: Modifier = Modifier
+    modifier: Modifier
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
 
     AndroidView(
         modifier = modifier,
-        factory = { ctx ->
-            PreviewView(ctx).apply {
-                scaleType = PreviewView.ScaleType.FILL_CENTER
-            }
-        },
+        factory = { PreviewView(it) },
         update = { previewView ->
             val future = ProcessCameraProvider.getInstance(context)
 
@@ -443,9 +451,8 @@ private fun CameraPreviewBox(
                             .requireLensFacing(lensFacing)
                             .build()
 
-                        val preview = Preview.Builder().build().also {
-                            it.setSurfaceProvider(previewView.surfaceProvider)
-                        }
+                        val preview = Preview.Builder().build()
+                        preview.setSurfaceProvider(previewView.surfaceProvider)
 
                         provider.unbindAll()
                         provider.bindToLifecycle(lifecycleOwner, selector, preview)
@@ -463,12 +470,12 @@ private fun HomeScreen(
     padding: PaddingValues,
     isRecording: Boolean,
     statusText: String,
-    selectedCamera: String,
-    selectedQuality: String,
+    lensFacing: Int,
+    cameraName: String,
+    quality: String,
     audioEnabled: Boolean,
     storageMode: String,
-    selectedLensFacing: Int,
-    onRecordingClick: () -> Unit,
+    onRecordClick: () -> Unit,
     onOpenCamera: () -> Unit,
     onOpenSettings: () -> Unit
 ) {
@@ -478,34 +485,26 @@ private fun HomeScreen(
             .padding(padding)
             .verticalScroll(rememberScrollState())
             .padding(20.dp),
-        verticalArrangement = Arrangement.spacedBy(18.dp)
+        verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         Header()
 
         Card(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(220.dp),
+                .height(240.dp),
             shape = RoundedCornerShape(24.dp),
             colors = CardDefaults.cardColors(containerColor = LockLensSurface),
             border = BorderStroke(1.dp, LockLensSurfaceElevated)
         ) {
-            CameraPreviewBox(
-                lensFacing = selectedLensFacing,
-                modifier = Modifier.fillMaxSize()
-            )
+            CameraPreview(lensFacing, Modifier.fillMaxSize())
         }
 
         Button(
-            onClick = onRecordingClick,
+            onClick = onRecordClick,
             modifier = Modifier
                 .fillMaxWidth()
-                .height(64.dp),
-            shape = RoundedCornerShape(22.dp),
-            colors = ButtonDefaults.buttonColors(
-                containerColor = if (isRecording) LockLensRecording else LockLensPrimary,
-                contentColor = LockLensBackground
-            )
+                .height(64.dp)
         ) {
             Text(
                 text = if (isRecording) "Остановить запись" else "Начать запись",
@@ -518,13 +517,11 @@ private fun HomeScreen(
             text = statusText,
             color = if (isRecording) LockLensRecording else LockLensSuccess,
             fontSize = 15.sp,
-            fontWeight = FontWeight.Medium,
-            textAlign = TextAlign.Center,
-            modifier = Modifier.fillMaxWidth()
+            fontWeight = FontWeight.Medium
         )
 
-        StatusCard("Камера", selectedCamera, LockLensPrimary, onOpenCamera)
-        StatusCard("Качество", selectedQuality, LockLensSecondary, onOpenCamera)
+        StatusCard("Камера", cameraName, LockLensPrimary, onOpenCamera)
+        StatusCard("Качество", quality, LockLensSecondary, onOpenCamera)
         StatusCard("Звук", if (audioEnabled) "Микрофон включён" else "Без звука", LockLensSuccess, onOpenSettings)
         StatusCard("Папка", storageModeTitle(storageMode), LockLensSecondary, onOpenSettings)
     }
@@ -532,10 +529,7 @@ private fun HomeScreen(
 
 @Composable
 private fun Header() {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
         Image(
             painter = painterResource(id = R.drawable.ic_locklens_symbol),
             contentDescription = "Логотип LockLens",
@@ -544,20 +538,9 @@ private fun Header() {
 
         Spacer(modifier = Modifier.width(12.dp))
 
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = "LockLens",
-                color = LockLensTextPrimary,
-                fontSize = 30.sp,
-                fontWeight = FontWeight.Bold,
-                maxLines = 1
-            )
-            Text(
-                text = "Запись с выключенным экраном",
-                color = LockLensTextSecondary,
-                fontSize = 14.sp,
-                maxLines = 1
-            )
+        Column {
+            Text("LockLens", color = LockLensTextPrimary, fontSize = 30.sp, fontWeight = FontWeight.Bold)
+            Text("Запись с выключенным экраном", color = LockLensTextSecondary, fontSize = 14.sp)
         }
     }
 }
@@ -567,7 +550,7 @@ private fun LibraryScreen(
     padding: PaddingValues,
     recordings: List<RecordingItem>,
     onRefresh: () -> Unit,
-    onPlay: (RecordingItem) -> Unit,
+    onOpen: (RecordingItem) -> Unit,
     onShare: (RecordingItem) -> Unit,
     onDelete: (RecordingItem) -> Unit,
     onExport: (RecordingItem) -> Unit
@@ -594,53 +577,42 @@ private fun LibraryScreen(
             )
         } else {
             recordings.forEach { item ->
-                RecordingCard(item, onPlay, onShare, onDelete, onExport)
-            }
-        }
-    }
-}
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(22.dp),
+                    colors = CardDefaults.cardColors(containerColor = LockLensSurface),
+                    border = BorderStroke(1.dp, LockLensSurfaceElevated)
+                ) {
+                    Column(
+                        modifier = Modifier.padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text(
+                            text = item.title,
+                            color = LockLensTextPrimary,
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
 
-@Composable
-private fun RecordingCard(
-    item: RecordingItem,
-    onPlay: (RecordingItem) -> Unit,
-    onShare: (RecordingItem) -> Unit,
-    onDelete: (RecordingItem) -> Unit,
-    onExport: (RecordingItem) -> Unit
-) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(22.dp),
-        colors = CardDefaults.cardColors(containerColor = LockLensSurface),
-        border = BorderStroke(1.dp, LockLensSurfaceElevated)
-    ) {
-        Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            Text(
-                text = item.title,
-                color = LockLensTextPrimary,
-                fontSize = 16.sp,
-                fontWeight = FontWeight.SemiBold,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
+                        Text(
+                            text = "${item.location} · ${formatSize(item.sizeBytes)} · ${formatDate(item.createdAtEpochMs)}",
+                            color = LockLensTextSecondary,
+                            fontSize = 13.sp
+                        )
 
-            Text(
-                text = "${item.location} · ${formatSize(item.sizeBytes)} · ${formatDate(item.createdAtEpochMs)}",
-                color = LockLensTextSecondary,
-                fontSize = 13.sp
-            )
+                        Row {
+                            TextButton(onClick = { onOpen(item) }) { Text("Открыть") }
+                            TextButton(onClick = { onShare(item) }) { Text("Поделиться") }
+                        }
 
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                TextButton(onClick = { onPlay(item) }) { Text("Открыть") }
-                TextButton(onClick = { onShare(item) }) { Text("Поделиться") }
-                TextButton(onClick = { onExport(item) }) { Text("В галерею") }
-            }
-
-            TextButton(onClick = { onDelete(item) }) {
-                Text("Удалить")
+                        Row {
+                            TextButton(onClick = { onExport(item) }) { Text("В галерею") }
+                            TextButton(onClick = { onDelete(item) }) { Text("Удалить") }
+                        }
+                    }
+                }
             }
         }
     }
@@ -672,32 +644,23 @@ private fun CameraScreen(
             colors = CardDefaults.cardColors(containerColor = LockLensSurface),
             border = BorderStroke(1.dp, LockLensSurfaceElevated)
         ) {
-            CameraPreviewBox(selectedLensFacing, Modifier.fillMaxSize())
+            CameraPreview(selectedLensFacing, Modifier.fillMaxSize())
         }
 
-        SelectableCard(
-            title = "Задняя камера",
-            subtitle = "Основная камера",
-            selected = selectedLensFacing == CameraSelector.LENS_FACING_BACK,
-            onClick = { onSelectLens(CameraSelector.LENS_FACING_BACK) }
-        )
+        SelectCard("Задняя камера", "Основная камера телефона", selectedLensFacing == CameraSelector.LENS_FACING_BACK) {
+            onSelectLens(CameraSelector.LENS_FACING_BACK)
+        }
 
-        SelectableCard(
-            title = "Фронтальная камера",
-            subtitle = "Камера для записи себя",
-            selected = selectedLensFacing == CameraSelector.LENS_FACING_FRONT,
-            onClick = { onSelectLens(CameraSelector.LENS_FACING_FRONT) }
-        )
+        SelectCard("Фронтальная камера", "Камера для записи себя", selectedLensFacing == CameraSelector.LENS_FACING_FRONT) {
+            onSelectLens(CameraSelector.LENS_FACING_FRONT)
+        }
 
         Text("Качество", color = LockLensTextPrimary, fontSize = 21.sp, fontWeight = FontWeight.Bold)
 
         qualityOptions.forEach { option ->
-            SelectableCard(
-                title = option.title,
-                subtitle = option.description,
-                selected = selectedQuality == option.code,
-                onClick = { onSelectQuality(option.code) }
-            )
+            SelectCard(option.title, option.description, selectedQuality == option.code) {
+                onSelectQuality(option.code)
+            }
         }
     }
 }
@@ -707,7 +670,7 @@ private fun SettingsScreen(
     padding: PaddingValues,
     audioEnabled: Boolean,
     storageMode: String,
-    customFolderUri: String,
+    customFolderSelected: Boolean,
     permissionStatus: String,
     onAudioChanged: (Boolean) -> Unit,
     onStorageModeChanged: (String) -> Unit,
@@ -735,29 +698,30 @@ private fun SettingsScreen(
 
         Text("Куда сохранять", color = LockLensTextPrimary, fontSize = 20.sp, fontWeight = FontWeight.Bold)
 
-        SelectableCard(
-            title = "Внутренняя библиотека",
-            subtitle = "Не отображается в галерее",
-            selected = storageMode == RecordingForegroundService.STORAGE_PRIVATE,
-            onClick = { onStorageModeChanged(RecordingForegroundService.STORAGE_PRIVATE) }
-        )
+        SelectCard(
+            "Внутренняя библиотека",
+            "Не отображается в галерее",
+            storageMode == RecordingForegroundService.STORAGE_PRIVATE
+        ) {
+            onStorageModeChanged(RecordingForegroundService.STORAGE_PRIVATE)
+        }
 
-        SelectableCard(
-            title = "Галерея / LockLens",
-            subtitle = "Видео будет видно в системной галерее",
-            selected = storageMode == RecordingForegroundService.STORAGE_GALLERY,
-            onClick = { onStorageModeChanged(RecordingForegroundService.STORAGE_GALLERY) }
-        )
+        SelectCard(
+            "Галерея / LockLens",
+            "Видео будет видно в системной галерее",
+            storageMode == RecordingForegroundService.STORAGE_GALLERY
+        ) {
+            onStorageModeChanged(RecordingForegroundService.STORAGE_GALLERY)
+        }
 
-        SelectableCard(
-            title = "Своя папка",
-            subtitle = if (customFolderUri.isBlank()) "Папка не выбрана" else "Папка выбрана",
-            selected = storageMode == RecordingForegroundService.STORAGE_CUSTOM,
-            onClick = {
-                onStorageModeChanged(RecordingForegroundService.STORAGE_CUSTOM)
-                onChooseFolder()
-            }
-        )
+        SelectCard(
+            "Своя папка",
+            if (customFolderSelected) "Папка выбрана" else "Папка не выбрана",
+            storageMode == RecordingForegroundService.STORAGE_CUSTOM
+        ) {
+            onStorageModeChanged(RecordingForegroundService.STORAGE_CUSTOM)
+            onChooseFolder()
+        }
 
         OutlinedButton(onClick = onChooseFolder) {
             Text("Выбрать папку")
@@ -776,12 +740,6 @@ private fun SettingsScreen(
         Button(onClick = onOpenBatterySettings) {
             Text("Открыть настройки батареи")
         }
-
-        StatusCard(
-            title = "Samsung",
-            subtitle = "Для долгой записи отключите ограничения батареи для LockLens.",
-            accent = LockLensSecondary
-        )
     }
 }
 
@@ -851,7 +809,7 @@ private fun SwitchCard(
 }
 
 @Composable
-private fun SelectableCard(
+private fun SelectCard(
     title: String,
     subtitle: String,
     selected: Boolean,
@@ -891,7 +849,7 @@ private fun SelectableCard(
 }
 
 @Composable
-private fun LockLensBottomNavigation(
+private fun BottomNav(
     selectedTab: Tab,
     onTabSelected: (Tab) -> Unit
 ) {
@@ -910,8 +868,7 @@ private fun LockLensBottomNavigation(
                     Text(
                         text = tab.icon,
                         color = if (selected) LockLensPrimary else LockLensTextSecondary,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 18.sp
+                        fontWeight = FontWeight.Bold
                     )
                 },
                 label = {
@@ -919,7 +876,6 @@ private fun LockLensBottomNavigation(
                         text = tab.label,
                         color = if (selected) LockLensPrimary else LockLensTextSecondary,
                         fontSize = 11.sp,
-                        fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
                         maxLines = 1
                     )
                 },
@@ -946,31 +902,20 @@ private fun requiredPermissions(audioEnabled: Boolean, storageMode: String): Arr
         permissions += Manifest.permission.POST_NOTIFICATIONS
     }
 
-    if (
-        storageMode == RecordingForegroundService.STORAGE_GALLERY &&
-        Build.VERSION.SDK_INT <= Build.VERSION_CODES.P
-    ) {
+    if (storageMode == RecordingForegroundService.STORAGE_GALLERY && Build.VERSION.SDK_INT <= Build.VERSION_CODES.P) {
         permissions += Manifest.permission.WRITE_EXTERNAL_STORAGE
     }
 
     return permissions.toTypedArray()
 }
 
-private fun hasRequiredPermissions(
-    context: Context,
-    audioEnabled: Boolean,
-    storageMode: String
-): Boolean {
+private fun hasRequiredPermissions(context: Context, audioEnabled: Boolean, storageMode: String): Boolean {
     return requiredPermissions(audioEnabled, storageMode).all { permission ->
         ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
     }
 }
 
-private fun permissionStatusText(
-    context: Context,
-    audioEnabled: Boolean,
-    storageMode: String
-): String {
+private fun permissionStatusText(context: Context, audioEnabled: Boolean, storageMode: String): String {
     val missing = requiredPermissions(audioEnabled, storageMode).filter { permission ->
         ContextCompat.checkSelfPermission(context, permission) != PackageManager.PERMISSION_GRANTED
     }
@@ -1019,11 +964,11 @@ private fun startRecordingService(
 
 private fun stopRecordingService(context: Context) {
     try {
-        val intent = Intent(context, RecordingForegroundService::class.java).apply {
-            action = RecordingForegroundService.ACTION_STOP_RECORDING
-        }
-
-        context.startService(intent)
+        context.startService(
+            Intent(context, RecordingForegroundService::class.java).apply {
+                action = RecordingForegroundService.ACTION_STOP_RECORDING
+            }
+        )
     } catch (_: Exception) {
     }
 }
@@ -1044,7 +989,7 @@ private fun storageModeTitle(mode: String): String {
     return when (mode) {
         RecordingForegroundService.STORAGE_GALLERY -> "Галерея / LockLens"
         RecordingForegroundService.STORAGE_CUSTOM -> "Выбранная папка"
-        else -> "Внутренняя библиотека LockLens"
+        else -> "Внутренняя библиотека"
     }
 }
 
@@ -1110,8 +1055,9 @@ private fun loadRecordings(context: Context, customFolderUri: String): List<Reco
 
     if (customFolderUri.isNotBlank()) {
         try {
-            val tree = DocumentFile.fromTreeUri(context, Uri.parse(customFolderUri))
-            tree?.listFiles()?.forEach { document ->
+            val folder = DocumentFile.fromTreeUri(context, Uri.parse(customFolderUri))
+
+            folder?.listFiles()?.forEach { document ->
                 val name = document.name ?: ""
 
                 if (document.isFile && name.endsWith(".mp4", ignoreCase = true)) {
@@ -1134,8 +1080,8 @@ private fun loadRecordings(context: Context, customFolderUri: String): List<Reco
 }
 
 private fun appVideoDir(context: Context): File {
-    val baseDir = context.getExternalFilesDir(Environment.DIRECTORY_MOVIES) ?: context.filesDir
-    val dir = File(baseDir, "LockLens")
+    val root = context.getExternalFilesDir(Environment.DIRECTORY_MOVIES) ?: context.filesDir
+    val dir = File(root, "LockLens")
 
     if (!dir.exists()) {
         dir.mkdirs()
@@ -1151,12 +1097,16 @@ private fun appVideoDir(context: Context): File {
 
 private fun openRecording(context: Context, item: RecordingItem): String {
     return try {
-        val intent = Intent(Intent.ACTION_VIEW).apply {
-            setDataAndType(item.uri, "video/mp4")
-            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        }
+        context.startActivity(
+            Intent.createChooser(
+                Intent(Intent.ACTION_VIEW).apply {
+                    setDataAndType(item.uri, "video/mp4")
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                },
+                "Открыть видео"
+            )
+        )
 
-        context.startActivity(Intent.createChooser(intent, "Открыть видео"))
         "Открываем видео"
     } catch (_: ActivityNotFoundException) {
         "На телефоне нет приложения для открытия видео"
@@ -1167,13 +1117,17 @@ private fun openRecording(context: Context, item: RecordingItem): String {
 
 private fun shareRecording(context: Context, item: RecordingItem): String {
     return try {
-        val intent = Intent(Intent.ACTION_SEND).apply {
-            type = "video/mp4"
-            putExtra(Intent.EXTRA_STREAM, item.uri)
-            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        }
+        context.startActivity(
+            Intent.createChooser(
+                Intent(Intent.ACTION_SEND).apply {
+                    type = "video/mp4"
+                    putExtra(Intent.EXTRA_STREAM, item.uri)
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                },
+                "Поделиться записью"
+            )
+        )
 
-        context.startActivity(Intent.createChooser(intent, "Поделиться записью"))
         "Открываем меню отправки"
     } catch (error: Exception) {
         error.message ?: "Не удалось поделиться записью"
@@ -1196,10 +1150,8 @@ private fun exportToGallery(context: Context, item: RecordingItem): Boolean {
     if (item.visibleInGallery) return true
 
     return try {
-        val outputName = normalizeVideoName(item.title)
-
         val values = ContentValues().apply {
-            put(MediaStore.Video.Media.DISPLAY_NAME, outputName)
+            put(MediaStore.Video.Media.DISPLAY_NAME, item.title)
             put(MediaStore.Video.Media.MIME_TYPE, "video/mp4")
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -1207,16 +1159,12 @@ private fun exportToGallery(context: Context, item: RecordingItem): Boolean {
             }
         }
 
-        val destinationUri = context.contentResolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, values)
+        val destination = context.contentResolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, values)
             ?: return false
 
         context.contentResolver.openInputStream(item.uri).use { input ->
-            context.contentResolver.openOutputStream(destinationUri).use { output ->
-                if (input == null || output == null) {
-                    context.contentResolver.delete(destinationUri, null, null)
-                    return false
-                }
-
+            context.contentResolver.openOutputStream(destination).use { output ->
+                if (input == null || output == null) return false
                 input.copyTo(output)
             }
         }
@@ -1225,15 +1173,6 @@ private fun exportToGallery(context: Context, item: RecordingItem): Boolean {
     } catch (_: Exception) {
         false
     }
-}
-
-private fun normalizeVideoName(input: String): String {
-    val cleaned = input
-        .trim()
-        .replace(Regex("""[\\/:*?"<>|]"""), "_")
-        .ifBlank { "LockLens_video" }
-
-    return if (cleaned.endsWith(".mp4", ignoreCase = true)) cleaned else "$cleaned.mp4"
 }
 
 private fun formatSize(sizeBytes: Long): String {

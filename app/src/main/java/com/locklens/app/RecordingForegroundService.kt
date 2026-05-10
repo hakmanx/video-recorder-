@@ -36,28 +36,27 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-private sealed class OutputSpec {
-    data class FileSpec(
+private sealed class RecordingOutput {
+    data class PrivateFile(
         val options: FileOutputOptions,
         val file: File
-    ) : OutputSpec()
+    ) : RecordingOutput()
 
-    data class MediaStoreSpec(
+    data class Gallery(
         val options: MediaStoreOutputOptions
-    ) : OutputSpec()
+    ) : RecordingOutput()
 
-    data class SafSpec(
+    data class CustomFolder(
         val options: FileDescriptorOutputOptions,
         val uri: Uri
-    ) : OutputSpec()
+    ) : RecordingOutput()
 }
 
 class RecordingForegroundService : LifecycleService() {
 
     private var activeRecording: Recording? = null
     private var cameraProvider: ProcessCameraProvider? = null
-    private var currentPrivateFile: File? = null
-    private var currentSafUri: Uri? = null
+    private var privateOutputFile: File? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -68,8 +67,8 @@ class RecordingForegroundService : LifecycleService() {
         super.onStartCommand(intent, flags, startId)
 
         when (intent?.action) {
-            ACTION_START_RECORDING -> startLockLensRecording(intent)
-            ACTION_STOP_RECORDING -> stopLockLensRecording()
+            ACTION_START_RECORDING -> startRecording(intent)
+            ACTION_STOP_RECORDING -> stopRecording()
             else -> stopSelf()
         }
 
@@ -77,7 +76,7 @@ class RecordingForegroundService : LifecycleService() {
     }
 
     @SuppressLint("MissingPermission")
-    private fun startLockLensRecording(intent: Intent) {
+    private fun startRecording(intent: Intent) {
         if (activeRecording != null) {
             sendState(STATE_RECORDING, "Запись уже идёт")
             return
@@ -92,14 +91,13 @@ class RecordingForegroundService : LifecycleService() {
         val lensFacing = intent.getIntExtra(EXTRA_LENS_FACING, CameraSelector.LENS_FACING_BACK)
         val audioEnabled = intent.getBooleanExtra(EXTRA_AUDIO_ENABLED, true)
         val storageMode = intent.getStringExtra(EXTRA_STORAGE_MODE) ?: STORAGE_PRIVATE
-        val customFolderUri = intent.getStringExtra(EXTRA_CUSTOM_FOLDER_URI)
-        val qualityCode = intent.getStringExtra(EXTRA_QUALITY) ?: QUALITY_FHD
+        val customFolderUri = intent.getStringExtra(EXTRA_CUSTOM_FOLDER_URI) ?: ""
+        val quality = intent.getStringExtra(EXTRA_QUALITY) ?: QUALITY_FHD
 
-        val audioAllowed =
-            audioEnabled &&
-                ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+        val audioAllowed = audioEnabled &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
 
-        startForegroundCompat(audioAllowed)
+        startForegroundSafe(audioAllowed)
         updateNotification("Подготовка камеры...")
         sendState(STATE_PREPARING, "Подготовка камеры...")
 
@@ -118,22 +116,22 @@ class RecordingForegroundService : LifecycleService() {
                     val recorder = Recorder.Builder()
                         .setQualitySelector(
                             QualitySelector.fromOrderedList(
-                                orderedQualities(qualityCode),
+                                orderedQualities(quality),
                                 FallbackStrategy.lowerQualityOrHigherThan(Quality.SD)
                             )
                         )
                         .build()
 
                     val videoCapture = VideoCapture.withOutput(recorder)
-                    val outputSpec = createOutputSpec(storageMode, customFolderUri)
+                    val output = createOutput(storageMode, customFolderUri)
 
                     provider.unbindAll()
                     provider.bindToLifecycle(this, cameraSelector, videoCapture)
 
-                    var pendingRecording: PendingRecording = when (outputSpec) {
-                        is OutputSpec.FileSpec -> recorder.prepareRecording(this, outputSpec.options)
-                        is OutputSpec.MediaStoreSpec -> recorder.prepareRecording(this, outputSpec.options)
-                        is OutputSpec.SafSpec -> recorder.prepareRecording(this, outputSpec.options)
+                    var pendingRecording: PendingRecording = when (output) {
+                        is RecordingOutput.PrivateFile -> recorder.prepareRecording(this, output.options)
+                        is RecordingOutput.Gallery -> recorder.prepareRecording(this, output.options)
+                        is RecordingOutput.CustomFolder -> recorder.prepareRecording(this, output.options)
                     }
 
                     if (audioAllowed) {
@@ -149,38 +147,37 @@ class RecordingForegroundService : LifecycleService() {
 
                             is VideoRecordEvent.Finalize -> {
                                 if (event.hasError()) {
-                                    currentPrivateFile?.delete()
+                                    privateOutputFile?.delete()
                                     sendState(STATE_FAILED, "Ошибка записи: ${event.error}")
                                 } else {
-                                    sendState(
-                                        STATE_COMPLETED,
-                                        when (storageMode) {
-                                            STORAGE_GALLERY -> "Запись сохранена в Галерею / LockLens"
-                                            STORAGE_CUSTOM -> "Запись сохранена в выбранную папку"
-                                            else -> "Запись сохранена во внутреннюю библиотеку"
-                                        }
-                                    )
+                                    val message = when (storageMode) {
+                                        STORAGE_GALLERY -> "Запись сохранена в Галерею / LockLens"
+                                        STORAGE_CUSTOM -> "Запись сохранена в выбранную папку"
+                                        else -> "Запись сохранена во внутреннюю библиотеку"
+                                    }
+
+                                    sendState(STATE_COMPLETED, message)
                                 }
 
-                                cleanupAfterRecording()
+                                cleanup()
                             }
                         }
                     }
                 } catch (error: Exception) {
-                    currentPrivateFile?.delete()
+                    privateOutputFile?.delete()
                     sendState(STATE_FAILED, error.message ?: "Не удалось запустить запись")
-                    cleanupAfterRecording()
+                    cleanup()
                 }
             },
             ContextCompat.getMainExecutor(this)
         )
     }
 
-    private fun stopLockLensRecording() {
+    private fun stopRecording() {
         val recording = activeRecording
 
         if (recording == null) {
-            cleanupAfterRecording()
+            cleanup()
             return
         }
 
@@ -190,32 +187,33 @@ class RecordingForegroundService : LifecycleService() {
         recording.stop()
     }
 
-    private fun createOutputSpec(storageMode: String, customFolderUri: String?): OutputSpec {
+    private fun createOutput(
+        storageMode: String,
+        customFolderUri: String
+    ): RecordingOutput {
         val fileName = "LockLens_" +
             SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date()) +
             ".mp4"
 
-        if (storageMode == STORAGE_CUSTOM && !customFolderUri.isNullOrBlank()) {
+        if (storageMode == STORAGE_CUSTOM && customFolderUri.isNotBlank()) {
             val treeUri = Uri.parse(customFolderUri)
-            val tree = DocumentFile.fromTreeUri(this, treeUri)
+            val folder = DocumentFile.fromTreeUri(this, treeUri)
                 ?: error("Не удалось открыть выбранную папку")
 
-            val document = tree.createFile("video/mp4", fileName)
+            val file = folder.createFile("video/mp4", fileName)
                 ?: error("Не удалось создать файл в выбранной папке")
 
-            val pfd = contentResolver.openFileDescriptor(document.uri, "rw")
+            val descriptor = contentResolver.openFileDescriptor(file.uri, "rw")
                 ?: error("Нет доступа к выбранной папке")
 
-            currentSafUri = document.uri
-
-            return OutputSpec.SafSpec(
-                FileDescriptorOutputOptions.Builder(pfd).build(),
-                document.uri
+            return RecordingOutput.CustomFolder(
+                options = FileDescriptorOutputOptions.Builder(descriptor).build(),
+                uri = file.uri
             )
         }
 
         if (storageMode == STORAGE_GALLERY) {
-            val contentValues = ContentValues().apply {
+            val values = ContentValues().apply {
                 put(MediaStore.Video.Media.DISPLAY_NAME, fileName)
                 put(MediaStore.Video.Media.MIME_TYPE, "video/mp4")
 
@@ -228,50 +226,50 @@ class RecordingForegroundService : LifecycleService() {
                 contentResolver,
                 MediaStore.Video.Media.EXTERNAL_CONTENT_URI
             )
-                .setContentValues(contentValues)
+                .setContentValues(values)
                 .build()
 
-            return OutputSpec.MediaStoreSpec(options)
+            return RecordingOutput.Gallery(options)
         }
 
-        val baseDir = getExternalFilesDir(Environment.DIRECTORY_MOVIES) ?: filesDir
-        val lockLensDir = File(baseDir, "LockLens")
+        val root = getExternalFilesDir(Environment.DIRECTORY_MOVIES) ?: filesDir
+        val folder = File(root, "LockLens")
 
-        if (!lockLensDir.exists()) {
-            lockLensDir.mkdirs()
+        if (!folder.exists()) {
+            folder.mkdirs()
         }
 
         try {
-            File(lockLensDir, ".nomedia").createNewFile()
+            File(folder, ".nomedia").createNewFile()
         } catch (_: Exception) {
         }
 
-        val outputFile = File(lockLensDir, fileName)
-        currentPrivateFile = outputFile
+        val file = File(folder, fileName)
+        privateOutputFile = file
 
-        return OutputSpec.FileSpec(
-            FileOutputOptions.Builder(outputFile).build(),
-            outputFile
+        return RecordingOutput.PrivateFile(
+            options = FileOutputOptions.Builder(file).build(),
+            file = file
         )
     }
 
-    private fun startForegroundCompat(audioAllowed: Boolean) {
+    private fun startForegroundSafe(audioAllowed: Boolean) {
         val notification = buildNotification("Запуск записи...", true)
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            var serviceType = ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA
+            var type = ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA
 
             if (audioAllowed) {
-                serviceType = serviceType or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+                type = type or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
             }
 
-            ServiceCompat.startForeground(this, NOTIFICATION_ID, notification, serviceType)
+            ServiceCompat.startForeground(this, NOTIFICATION_ID, notification, type)
         } else {
             startForeground(NOTIFICATION_ID, notification)
         }
     }
 
-    private fun cleanupAfterRecording() {
+    private fun cleanup() {
         try {
             activeRecording?.close()
         } catch (_: Exception) {
@@ -285,8 +283,7 @@ class RecordingForegroundService : LifecycleService() {
         }
 
         cameraProvider = null
-        currentPrivateFile = null
-        currentSafUri = null
+        privateOutputFile = null
 
         try {
             stopForeground(STOP_FOREGROUND_REMOVE)
