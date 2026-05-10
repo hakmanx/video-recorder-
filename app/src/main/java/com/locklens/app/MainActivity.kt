@@ -189,9 +189,7 @@ private fun LockLensApp() {
             val error = startRecordingService(
                 context = context,
                 lensFacing = selectedLensFacing,
-                        cameraId = selectedCameraId,
-                cameraId = selectedCameraId,
-                audioEnabled = audioEnabled,
+                        cameraId = selectedCameraId,audioEnabled = audioEnabled,
                 storageMode = storageMode,
                 customFolderUri = customFolderUri,
                 quality = selectedQuality
@@ -335,9 +333,7 @@ private fun LockLensApp() {
                                     val error = startRecordingService(
                                         context = context,
                                         lensFacing = selectedLensFacing,
-                        cameraId = selectedCameraId,
-                                        cameraId = selectedCameraId,
-                                        audioEnabled = audioEnabled,
+                        cameraId = selectedCameraId,audioEnabled = audioEnabled,
                                         storageMode = storageMode,
                                         customFolderUri = customFolderUri,
                                         quality = selectedQuality
